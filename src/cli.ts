@@ -392,8 +392,9 @@ async function cmdGet(apiKey: string, id: string, first: number): Promise<Result
     apiKey,
     `query($id: String!, $first: Int!) {
       issue(id: $id) {
-        id identifier title description priority url createdAt updatedAt
-        state { id name type } assignee { id name email } team { id key name }
+        ${ISSUE_FIELDS}
+        description
+        assignee { email }
         labels { nodes { id name } }
         comments(first: $first, orderBy: createdAt) {
           nodes { ${COMMENT_FIELDS} }
@@ -484,7 +485,7 @@ async function cmdCreate(apiKey: string, flags: Flags): Promise<Result> {
   const r = await gql(
     apiKey,
     `mutation($input: IssueCreateInput!) {
-      issueCreate(input: $input) { success issue { id identifier title url state { name } team { key } } }
+      issueCreate(input: $input) { success issue { id identifier title description url state { name } team { key } } }
     }`,
     { input },
   );
@@ -508,7 +509,7 @@ async function cmdUpdate(apiKey: string, flags: Flags): Promise<Result> {
   const r = await gql(
     apiKey,
     `mutation($id: String!, $input: IssueUpdateInput!) {
-      issueUpdate(id: $id, input: $input) { success issue { id identifier title url state { name } assignee { name } priority } }
+      issueUpdate(id: $id, input: $input) { success issue { id identifier title description url state { name } assignee { name } priority } }
     }`,
     { id, input },
   );
