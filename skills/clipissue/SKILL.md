@@ -101,7 +101,8 @@ clipissue issues --json [--query TEXT] [--team KEY] [--first N]
 clipissue search <query> --json        # issues --query 的别名
 clipissue views --json [--first N]     # 列出自定义视图
 clipissue view <name|id> --json [--first N]   # 某个视图里的议题
-clipissue get ENG-123 --json [--first N]      # 或 UUID；含评论（默认 50 条）
+clipissue get ENG-123 --json [--first N]      # 或 UUID；含评论（默认 50 条）和直接子议题
+clipissue children ENG-123 --json [--first N] # 只拉直接子议题，按 createdAt 升序
 clipissue comments ENG-123 --json [--first N] # 只拉评论，按 createdAt 升序
 ```
 
@@ -128,7 +129,9 @@ clipissue issues --json --top-level --state "Todo,In Progress,In Review" --first
 
 `view` 的参数可以是视图名或 UUID，传名字时先精确匹配再忽略大小写匹配；返回 `{ view, issues }`，issues 字段与 `clipissue issues` 一致。脚本里要区分「视图不存在」和「视图为空」时，先 `clipissue views` 拿到 name→id 映射，再按 id 取，别依赖错误文案。
 
-`get` 带 `comments` 数组（正文、作者、时间、`parent.id` 表示回复）。只要讨论内容时用 `comments`，不必再拆 `get`。`--first` 上限 250、默认 50，取较新的 N 条再按 `createdAt` 升序排出；评论很多时加大 `--first`，不要假设一次拿全。`comments` 返回 `{ issue, comments }`；议题不存在时报错，没有评论时 `comments` 为空数组。作者优先 `user`，其次 `externalUser`（Slack 等），再其次 `botActor`（Agent / 机器人）。
+`get` 带 `comments` 数组（正文、作者、时间、`parent.id` 表示回复）和 `children` 数组（该议题的直接子议题，字段与 `issues` 相同，按 `createdAt` 升序）。没有子议题时 `children` 为空数组。子议题最多 250 条；还有更多时 `childrenTruncated` 为 `true`。`get` 的 `--first` 只限制评论，不限制子议题。只要讨论内容时用 `comments`，只要子议题时用 `children`，不必再拆 `get`。`--first` 上限 250、默认 50，取较新的 N 条评论再按 `createdAt` 升序排出；评论很多时加大 `--first`，不要假设一次拿全。`comments` 返回 `{ issue, comments }`；议题不存在时报错，没有评论时 `comments` 为空数组。作者优先 `user`，其次 `externalUser`（Slack 等），再其次 `botActor`（Agent / 机器人）。
+
+`children` 按父议题向 Linear 取直接子议题，不走「最近更新的议题列表」。返回 `{ issue, children, truncated }`。先最多取 250 条再按 `createdAt` 升序排列，`--first` 从排好的结果里截取（默认 250）。`truncated: true` 表示还有没返回的直接子议题：要么超过 250 条上限，要么 `--first` 小于实际条数。只要这一层，不含孙议题。查某个父议题拆出了哪些子议题时用它，不要再用 `issues` 按 `parent` 自己筛。
 
 ### 写操作（先确认再执行；并遵守上方「议题运营规范」）
 
@@ -166,5 +169,5 @@ clipissue skills uninstall         # 移除复制的技能
 - 创建议题前先 `clipissue teams --json` 拿 `key`，再 `clipissue projects --json` 拿目标 `projectId`；**没有 project 不要 create**。
 - 需要拆解时先建/确认父议题，再 `create ... parentId=<uuid> projectId=<uuid>`；不要把拆解项写成评论 checklist。
 - 更新状态优先用 `clipissue update <id> state=<状态名> --json`：CLI 按议题所属 team 自动解析成 `stateId`，也接受类型名（如 `completed`），名称写错会返回该 team 的全部状态名。只有要展示/排序状态集时才 `clipissue states --json --team <key>`。不要猜测 stateId 的 UUID 或让用户手查。
-- 标 Done 前扫一眼 description / 未关闭子议题：有尾巴就先新建议题追踪，再 completed。
+- 标 Done 前用 `clipissue children <id> --json` 看未关闭子议题：有尾巴就先新建议题追踪，再 completed。
 - 输出过大时用 `--first` 收窄；查不到项目时先确认 team key 拼写。

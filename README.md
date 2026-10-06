@@ -6,7 +6,7 @@ Clipissue CLI：基于官方 Linear GraphQL API 的项目与议题管理命令�
 
 - `login` / `logout` / `whoami`：凭据管理（macOS Keychain）与身份查看
 - `teams` / `projects` / `states`：列出团队、项目与工作流状态（支持 `--team`、`--query`、`--include-archived`）
-- `issues` / `search` / `get` / `comments`：搜索、查看议题与评论
+- `issues` / `search` / `get` / `children` / `comments`：搜索、查看议题、子议题与评论
 - `create` / `update` / `comment`：创建议题、更新字段、添加评论
 - 所有命令支持 `--json` 结构化输出，适合 Agent 与脚本调用
 
@@ -44,6 +44,7 @@ clipissue projects --json --team ENG
 clipissue states --json --team ENG   # 查状态列表，拿 stateId 供 update 使用
 clipissue issues --json --query "登录"
 clipissue get ENG-123 --json
+clipissue children ENG-123 --json
 clipissue comments ENG-123 --json
 clipissue create "修复登录超时" --team ENG --json
 clipissue update ENG-123 state=Done --json   # state=<名称> 自动解析为 stateId

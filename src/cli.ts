@@ -257,11 +257,38 @@ function collapseText(text: string, max: number): string {
 
 function commentsFromConnection(connection: { nodes?: unknown[] } | null | undefined): unknown[] {
   const nodes = connection?.nodes ?? [];
+  return sortByCreatedAt(nodes);
+}
+
+interface ChildrenConnection {
+  nodes?: unknown[];
+  pageInfo?: { hasNextPage?: boolean };
+}
+
+/** Immediate sub-issues only. `--first` on `get` limits comments, so children use this cap. */
+const CHILDREN_LIMIT = 250;
+
+const CHILDREN_CONNECTION = `children(first: $childrenFirst) {
+  pageInfo { hasNextPage }
+  nodes { ${ISSUE_FIELDS} }
+}`;
+
+function sortByCreatedAt(nodes: unknown[]): unknown[] {
   return [...nodes].sort((a, b) => {
     const at = String((a as Record<string, unknown>).createdAt ?? '');
     const bt = String((b as Record<string, unknown>).createdAt ?? '');
     return at.localeCompare(bt);
   });
+}
+
+function childrenFromConnection(connection: ChildrenConnection | null | undefined): {
+  children: unknown[];
+  truncated: boolean;
+} {
+  return {
+    children: sortByCreatedAt(connection?.nodes ?? []),
+    truncated: Boolean(connection?.pageInfo?.hasNextPage),
+  };
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -396,7 +423,7 @@ async function cmdView(apiKey: string, nameOrId: string, first: number): Promise
 async function cmdGet(apiKey: string, id: string, first: number): Promise<Result> {
   const r = await gql(
     apiKey,
-    `query($id: String!, $first: Int!) {
+    `query($id: String!, $first: Int!, $childrenFirst: Int!) {
       issue(id: $id) {
         ${ISSUE_FIELDS}
         description
@@ -405,20 +432,68 @@ async function cmdGet(apiKey: string, id: string, first: number): Promise<Result
         comments(first: $first, orderBy: createdAt) {
           nodes { ${COMMENT_FIELDS} }
         }
+        ${CHILDREN_CONNECTION}
       }
     }`,
-    { id, first },
+    { id, first, childrenFirst: CHILDREN_LIMIT },
   );
   if (!r.ok) return { ok: false, message: describeError(r) };
-  const data = r.data as { issue?: { comments?: { nodes?: unknown[] } } | null };
+  const data = r.data as {
+    issue?: { comments?: { nodes?: unknown[] }; children?: ChildrenConnection } | null;
+  };
   if (data.issue === null || data.issue === undefined) {
     return { ok: false, message: `issue not found: ${id}` };
   }
   const issue = data.issue;
+  const children = childrenFromConnection(issue.children);
   return {
     ok: true,
     value: {
-      issue: { ...issue, comments: commentsFromConnection(issue.comments) },
+      issue: {
+        ...issue,
+        comments: commentsFromConnection(issue.comments),
+        children: children.children,
+        childrenTruncated: children.truncated,
+      },
+    },
+  };
+}
+
+async function cmdChildren(apiKey: string, id: string, first: number): Promise<Result> {
+  const r = await gql(
+    apiKey,
+    `query($id: String!, $childrenFirst: Int!) {
+      issue(id: $id) {
+        id identifier title
+        ${CHILDREN_CONNECTION}
+      }
+    }`,
+    { id, childrenFirst: CHILDREN_LIMIT },
+  );
+  if (!r.ok) return { ok: false, message: describeError(r) };
+  const issue = (
+    r.data as {
+      issue?: {
+        id: string;
+        identifier: string;
+        title: string;
+        children?: ChildrenConnection;
+      } | null;
+    }
+  ).issue;
+  if (issue === null || issue === undefined) {
+    return { ok: false, message: `issue not found: ${id}` };
+  }
+  // Linear returns this connection newest-updated first. Sort the page, then
+  // apply --first, so a short list is the earliest children rather than whichever
+  // two were edited last.
+  const children = childrenFromConnection(issue.children);
+  return {
+    ok: true,
+    value: {
+      issue: { id: issue.id, identifier: issue.identifier, title: issue.title },
+      children: children.children.slice(0, first),
+      truncated: children.truncated || children.children.length > first,
     },
   };
 }
@@ -940,6 +1015,30 @@ async function run(argv: string[]): Promise<void> {
       printResult(result, flags.json, () => jsonOut(getValue));
       return;
     }
+    case 'children': {
+      const id = rest[0] ?? '';
+      if (!id) {
+        console.error(JSON.stringify({ success: false, error: 'usage: clipissue children <issueId>' }, null, 2));
+        process.exitCode = 1;
+        return;
+      }
+      const first = clampInt(flags.first, CHILDREN_LIMIT, 1, CHILDREN_LIMIT);
+      const result = await withApiKey((k) => cmdChildren(k, id, first));
+      printResult(result, flags.json, () => {
+        const value = (result as { value: { children: Array<Record<string, unknown>>; truncated: boolean } }).value;
+        const cols: TableColumn<Record<string, unknown>>[] = [
+          { header: 'IDENTIFIER', value: (r) => String(r.identifier ?? '') },
+          { header: 'TITLE', value: (r) => String(r.title ?? '') },
+          { header: 'STATE', value: (r) => String(((r.state as Record<string, unknown>) ?? {}).name ?? '') },
+          { header: 'ID', value: (r) => String(r.id ?? '') },
+        ];
+        const table = tableOut(value.children, cols);
+        return value.truncated
+          ? `${table}\n… more children exist (showing ${value.children.length}, cap ${CHILDREN_LIMIT})`
+          : table;
+      });
+      return;
+    }
     case 'comments': {
       const id = rest[0] ?? '';
       if (!id) {
@@ -1074,7 +1173,8 @@ Usage:
   clipissue search <query> [--json]      Search issues (alias for issues --query)
   clipissue views [--json] [--first N]   List custom views
   clipissue view <name|id> [--json] [--first N]   Issues in a custom view
-  clipissue get <issueId> [--json] [--first N]   Show one issue (includes comments)
+  clipissue get <issueId> [--json] [--first N]   Show one issue (includes comments and sub-issues)
+  clipissue children <issueId> [--json] [--first N]   List immediate sub-issues of an issue
   clipissue comments <issueId> [--json] [--first N]   List comments on an issue
   clipissue create "<title>" --team KEY [field=value ...] [--json]
   clipissue update <issueId> <field=value> ... [--json]
