@@ -68,7 +68,7 @@ export function gql(apiKey: string, query: string, variables?: Record<string, un
 export function describeError(err: GqlErr): string {
   switch (err.code) {
     case 'HTTP_401':
-      return 'Authentication failed: your Linear API key is invalid or revoked. Re-run `linear login` to update it.';
+      return 'Authentication failed: your Linear API key is invalid or revoked. Re-run `clipissue login` to update it.';
     case 'HTTP_403':
       return 'Permission denied: your Linear API key cannot access this resource.';
     case 'HTTP_429':

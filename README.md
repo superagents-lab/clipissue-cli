@@ -1,6 +1,22 @@
 # clipissue
 
-Clipissue CLI：基于官方 Linear GraphQL API 的项目与议题管理命令行工具，能力对齐本地 Cindy Linear 插件。
+Clipissue CLI：基于官方 Linear GraphQL API 的项目与议题管理命令行工具，由 SuperAgents 维护。
+
+独立仓库：[superagents-lab/clipissue-cli](https://github.com/superagents-lab/clipissue-cli)。CLI 可独立使用；macOS 上也能与 [Clipissue](https://clipissue.com) 菜单栏应用共用已保存的 API Key。
+
+## 安装
+
+需要 Node.js 18 或更新版本。目前尚未发布 npm 包，可从源码安装：
+
+```bash
+git clone https://github.com/superagents-lab/clipissue-cli.git
+cd clipissue-cli
+npm ci
+npm link
+clipissue help
+```
+
+计划发布的 npm 包名是 `@fatwang2/clipissue`，安装后的命令为 `clipissue`。包内包含预编译 JavaScript，无需在用户机器上编译 TypeScript。
 
 ## 功能
 
@@ -10,19 +26,19 @@ Clipissue CLI：基于官方 Linear GraphQL API 的项目与议题管理命令�
 - `create` / `update` / `comment`：创建议题、更新字段、添加评论
 - 所有命令支持 `--json` 结构化输出，适合 Agent 与脚本调用
 
-## 安装（推荐：二进制，免 Node）
+## 自行构建二进制（免 Node）
 
-单文件二进制（含运行时，无需 Node）由 `scripts/build-binary.sh` 构建，随发布物
-以 tar.gz 分发（内含 `clipissue` 二进制 + `skills/` 目录）。安装后布局：
+单文件二进制（含运行时，无需 Node）由 `scripts/build-binary.sh` 构建，输出
+tar.gz（内含 `clipissue` 二进制 + `skills/` 目录）。当前尚未提供预构建下载。安装后布局：
 
 ```
 ~/.local/bin/clipissue-cli/clipissue    # 二进制 + skills/ 同目录
 ~/.local/bin/clipissue                  # 软链接 → clipissue-cli/clipissue
 ```
 
-- **手动安装**：下载 `clipissue-<arch>.tar.gz`，解压到 `~/.local/bin/clipissue-cli/`，
+- **手动安装**：构建 `clipissue-<arch>.tar.gz`，解压到 `~/.local/bin/clipissue-cli/`，
   再 `ln -sf ~/.local/bin/clipissue-cli/clipissue ~/.local/bin/clipissue`。
-- **开发模式**：在仓库 `cli/` 下 `node bin/link.mjs`，把 `~/.local/bin/clipissue`
+- **开发模式**：在独立仓库根目录运行 `node bin/link.mjs`，把 `~/.local/bin/clipissue`
   软链到源码入口（Clipissue 应用内已不再提供一键安装入口）。
 
 ## 构建二进制
@@ -55,9 +71,9 @@ clipissue comment ENG-123 "已定位，待修复" --json
 
 - API Key 保存在 macOS Keychain（service `com.clipissue.mac` / account `linear-api-key`），与 **Clipissue 菜单栏应用共用同一条目**：一端配置两端可用。若已在 Clipissue 设置页填入 API Key，CLI 无需 `login` 即可使用。历史条目（`app.linearlite`、`com.fatwang2.linear-cli`）在读取时自动迁移到新命名空间。
 - 其它平台回退到 `~/.config/clipissue/credentials.json`（0600）。
-- Key 永不作为命令参数、永不打印；错误输出不包含请求头。
+- `login <api-key>` 会把 Key 作为命令参数传入，可能留在 shell 历史和进程列表里；也可使用应用设置页保存 Key，或在自动化中通过环境变量传入。CLI 不主动打印 Key；macOS 保存时会调用系统 `security` 工具并通过参数传递 Key。
 - CI 可用 `CLIPISSUE_API_KEY`（兼容旧 `LINEAR_API_KEY`）环境变量，但环境变量可见性低于 Keychain，仅限自动化场景。
-- 若要公开给其他用户，建议改为每位用户自己的 Key，或后续迁移 Linear OAuth。
+- 每位用户使用自己的 Linear API Key。CLI 暂不支持 OAuth；应用的 OAuth 登录不会为 CLI 提供 API Key。
 
 ## 安装 Agent 技能
 
@@ -82,17 +98,22 @@ clipissue skills uninstall    # 移除复制的技能
 - `skills/clipissue/SKILL.md`：Agent 使用手册
 - `scripts/build-binary.sh`：单文件二进制构建（bun compile）
 
-## 开发（源码模式，默认）
+## 开发
 
-`~/.local/bin/clipissue` 软链接指向 `bin/clipissue.mjs`，它默认**优先直接跑 `src/cli.ts`**
-（Node >= 22.6 类型剥离）：**改完 `src/` 立刻生效，无需 build、无需任何步骤**。
+开发软链接指向 `bin/clipissue.mjs`，它默认**优先直接跑 `src/cli.ts`**
+（Node >= 22.6 类型剥离）：改完 `src/` 立刻生效。
 
 - Node < 22.6（不支持类型剥离）→ 自动回退 `dist/` 编译产物（需先 `npm run build`）；
 - 想强制走编译产物（如验证发布物行为）→ `CLIPISSUE_USE_DIST=1 clipissue ...`。
 
 ```bash
-pnpm install
-pnpm typecheck    # 改完顺手查类型（可选）
-pnpm link         # 一次性：把本地入口链接到 PATH
+npm ci
+npm run typecheck
+npm test          # 打包、在临时目录安装，并验证命令和 skills 安装
+npm link
 node bin/clipissue.mjs help
 ```
+
+## npm 发布
+
+`npm publish --access public` 前会自动执行类型检查与安装包测试。GitHub CI 在 Node 18、22、24 上执行相同检查。仓库不自动发布 npm，需有包发布权限的维护者手动发布；首次发布后应同步更新上面的安装说明。

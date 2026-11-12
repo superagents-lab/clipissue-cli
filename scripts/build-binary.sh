@@ -3,7 +3,7 @@
 #
 # 发布物布局（解压后）：
 #   clipissue                        # bun 编译的单文件二进制（含运行时，无需 Node）
-#   skills/clipissue-cli/SKILL.md    # Agent 技能源，二进制从旁边读取
+#   skills/clipissue/SKILL.md        # Agent 技能源，二进制从旁边读取
 #
 # 依赖：bun >= 1.4.0（1.3.x stable 编译产物在 macOS 27 上会 SIGKILL；
 #       请用 `bun upgrade` 更新到 canary/1.4+）。
@@ -26,14 +26,14 @@ VERSION="$(node -p "require('./package.json').version")"
 echo "==> clipissue-cli v$VERSION  target=$TARGET"
 
 rm -rf dist-bin
-mkdir -p dist-bin/staging/skills/clipissue-cli
+mkdir -p dist-bin/staging/skills/clipissue
 
 "$BUN" build src/cli.ts --compile \
   --target="$TARGET" \
   --define=BUILD_VERSION="\"$VERSION\"" \
   --outfile dist-bin/staging/clipissue
 
-cp skills/clipissue-cli/SKILL.md dist-bin/staging/skills/clipissue-cli/SKILL.md
+cp skills/clipissue/SKILL.md dist-bin/staging/skills/clipissue/SKILL.md
 
 tar -czf "dist-bin/clipissue-$ARCH.tar.gz" -C dist-bin/staging .
 

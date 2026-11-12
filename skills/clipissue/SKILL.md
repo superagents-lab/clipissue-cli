@@ -29,7 +29,7 @@ Clipissue CLI wraps the official Linear GraphQL API for project and issue manage
 
 每次使用前按顺序确认：
 
-1. `command -v clipissue` — CLI 已安装（开发模式 `node cli/bin/link.mjs` 软链，或手动下载二进制解压到 `~/.local/bin/clipissue-cli/`）。
+1. `command -v clipissue` — CLI 已安装（npm 正式发布后可用 `npm install -g @fatwang2/clipissue`；当前可在独立仓库运行 `npm install && node bin/link.mjs`，或手动安装自行构建的二进制）。
 2. `clipissue whoami --json` — 已登录且 API Key 有效。失败时停下：若用户已在 **Clipissue**（菜单栏应用）设置页填过 API Key，CLI 与它共用同一 Keychain 条目，直接可用、无需重新登录；否则让用户运行 `clipissue login <api-key>`，**不要自己编 key 试**，也不要把 key 当参数传给其它命令。
 
 ## 通用约定

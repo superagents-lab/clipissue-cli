@@ -1,9 +1,17 @@
 {
   "name": "@fatwang2/clipissue",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "description": "Clipissue CLI: project and issue management for your Linear workspace via the official Linear GraphQL API.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/superagents-lab/clipissue-cli.git"
+  },
+  "homepage": "https://github.com/superagents-lab/clipissue-cli#readme",
+  "bugs": "https://github.com/superagents-lab/clipissue-cli/issues",
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=18"
   },
@@ -11,15 +19,18 @@
     "clipissue": "bin/clipissue.mjs"
   },
   "files": [
-    "bin",
-    "src",
+    "bin/clipissue.mjs",
+    "dist",
     "skills",
     "README.md"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "tsc",
-    "start": "node src/cli.mjs",
+    "start": "node bin/clipissue.mjs",
+    "prepare": "npm run build",
+    "test": "npm run build && node --test test/package.test.mjs",
+    "prepublishOnly": "npm run typecheck && npm test",
     "link": "node bin/link.mjs"
   },
   "devDependencies": {
