@@ -74,15 +74,15 @@ clipissue comment ENG-123 "已定位，待修复" --json
 
 `clipissue login` 启动本机回调服务并打开 Linear 授权页，使用 PKCE S256 与随机 state，无需 client secret。授权范围为 `read,write`，以用户身份操作。令牌到期前会自动刷新；收到 HTTP 401 时刷新并重试一次。CLI 与 Mac 客户端分别保存 OAuth 登录，互不依赖。
 
-首次配置 OAuth 应用时，需要在 Linear 应用的 Redirect URLs 中追加以下地址，并保留 Mac 应用和云端插件的既有回调：
+默认 Clipissue OAuth 应用已配置以下本机回调，直接运行 `clipissue login` 即可授权，无需自行创建或配置 OAuth 应用：
 
 ```text
 http://127.0.0.1:52837/oauth/callback
 ```
 
-默认复用 Clipissue 的公开 client ID `22203e33a70d34549ddeff09fac69098`。也可通过 `CLIPISSUE_OAUTH_CLIENT_ID` 与 `CLIPISSUE_OAUTH_REDIRECT_URI` 使用自己的应用；重定向地址必须是带端口的 `http://127.0.0.1` 地址，并在对应 Linear 应用中登记。默认回调端口被占用时，先关闭另一个登录进程再试。登录超时为三分钟，可用 Ctrl+C 取消。
+默认复用 Clipissue 的公开 client ID `22203e33a70d34549ddeff09fac69098`。也可通过 `CLIPISSUE_OAUTH_CLIENT_ID` 与 `CLIPISSUE_OAUTH_REDIRECT_URI` 使用自己的应用；重定向地址必须是带端口的 `http://127.0.0.1` 地址，并在自己的 Linear 应用的 Redirect URLs 中登记，同时保留该应用已有的其他回调。默认回调端口被占用时，先关闭另一个登录进程再试。登录超时为三分钟，可用 Ctrl+C 取消。
 
-`--no-browser` 仅停止自动打开浏览器，仍需浏览器能访问运行 CLI 的机器上的回调地址；它不是远程服务器的设备码登录。默认应用的本机回调必须先由维护者登记，仓库代码不会自动修改 Linear 应用设置。
+`--no-browser` 仅停止自动打开浏览器，仍需浏览器能访问运行 CLI 的机器上的回调地址；它不是远程服务器的设备码登录。自定义应用的回调需要自行登记，仓库代码不会自动修改 Linear 应用设置。
 
 ## 凭据安全
 
