@@ -30,14 +30,14 @@ Clipissue CLI wraps the official Linear GraphQL API for project and issue manage
 每次使用前按顺序确认：
 
 1. `command -v clipissue` — CLI 已安装（npm 正式发布后可用 `npm install -g @fatwang2/clipissue`；当前可在独立仓库运行 `npm install && node bin/link.mjs`，或手动安装自行构建的二进制）。
-2. `clipissue whoami --json` — 已登录且 API Key 有效。失败时停下：若用户已在 **Clipissue**（菜单栏应用）设置页填过 API Key，CLI 与它共用同一 Keychain 条目，直接可用、无需重新登录；否则让用户运行 `clipissue login <api-key>`，**不要自己编 key 试**，也不要把 key 当参数传给其它命令。
+2. `clipissue whoami --json` — 验证登录并查看 `authentication.method` 和 `source`。支持独立 OAuth，无需 Mac 客户端。未登录时让用户运行 `clipissue login` 完成浏览器授权；`--no-browser` 可打印链接供手动打开，但仍需要本机回调可达。也兼容用户自行配置的 API Key。不要替用户编造凭据，不要读取或打印 Keychain / 凭据文件里的令牌。
 
 ## 通用约定
 
 - **Agent 一律加 `--json`**：所有命令支持，输出结构化 JSON 便于解析。
 - 失败统一输出 `{"success":false,"error":"..."}` 并以非 0 退出码退出。
 - CLI 完全 non-interactive，可在脚本中安全使用。
-- 凭据来源优先级：`CLIPISSUE_API_KEY`（兼容旧 `LINEAR_API_KEY`）环境变量 > macOS Keychain > 非 macOS 配置文件。macOS 上 Keychain 与 **Clipissue（菜单栏应用）共用同一位置**（service `com.clipissue.mac` / account `linear-api-key`）：用户在 Clipissue 设置页填入的 API Key，CLI 直接可用，反之亦然。Key 永不作为 CLI 参数，永不打印。
+- 凭据优先级：`CLIPISSUE_API_KEY`（兼容 `LINEAR_API_KEY`）环境变量 > CLI OAuth > 已保存的 API Key。OAuth 与 Mac 客户端分别保存并自动刷新；API Key 在 macOS 上仍共用 service `com.clipissue.mac` / account `linear-api-key`。OAuth 刷新失败时提示重新运行 `clipissue login`，不要自行回退或切换账号。凭据不得打印或写入议题。
 - 写操作（create / update / comment）会改变 Linear 外部状态，执行前先向用户说明将修改什么；结果 `success:false` 且错误为网络/超时时，不要盲目重试（执行状态未知）。
 
 ## 议题运营规范（必须遵守）
@@ -84,8 +84,10 @@ clipissue update ENG-123 state=Done --json
 ### 账号
 
 ```bash
-clipissue login <api-key>     # 保存 API Key 到 Keychain（与 Clipissue 共用同一条目）
-clipissue logout              # 删除已保存的 Key
+clipissue login               # 独立浏览器 OAuth 登录，用户完成授权
+clipissue login --no-browser  # 手动打开授权 URL，仍需本机回调
+clipissue login <api-key>     # 兼容 API Key 登录（Key 作为参数可能进入历史）
+clipissue logout              # 清除本地 CLI OAuth 与保存的 API Key
 clipissue whoami --json       # 当前用户 + 组织
 ```
 
@@ -98,7 +100,7 @@ clipissue projects --json [--team KEY] [--query TEXT] [--include-archived] [--fi
 clipissue issues --json [--query TEXT] [--team KEY] [--first N]
                      [--state "Todo,In Progress"] [--top-level]
                      [--completed-after ISO] [--completed-before ISO]
-clipissue search <query> --json        # issues --query 的别名
+clipissue search <query> --json        # 位置参数搜索；空查询报错，不会回退到最近议题列表
 clipissue views --json [--first N]     # 列出自定义视图
 clipissue view <name|id> --json [--first N]   # 某个视图里的议题
 clipissue get ENG-123 --json [--first N]      # 或 UUID；含评论（默认 50 条）和直接子议题

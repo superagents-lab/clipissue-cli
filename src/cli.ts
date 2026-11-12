@@ -5,13 +5,15 @@
  * commands with `--json` output for agents and CI.
  *
  * Credential policy:
- *   - API key lives in macOS Keychain (or a 0600 config file elsewhere);
+ *   - OAuth tokens and API keys live in Keychain (or 0600 config files elsewhere);
  *   - `CLIPISSUE_API_KEY` env (legacy: `LINEAR_API_KEY`) is honored for CI,
  *     but never printed;
- *   - the key is never accepted as a CLI argument.
+ *   - OAuth uses a public client with PKCE; legacy API key login remains supported.
  */
 
-import { clearApiKey, hasApiKey, loadApiKey, saveApiKey } from './credential.ts';
+import { clearApiKey, clearOAuth, environmentApiKey, saveApiKey, saveOAuth, withOAuthLock } from './credential.ts';
+import { getAuth, type Auth } from './auth.ts';
+import { authorize, openBrowser } from './oauth.ts';
 import { describeError, gql, type GqlResult } from './linear.ts';
 import { jsonOut, tableOut, type TableColumn } from './output.ts';
 import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -23,6 +25,7 @@ type Result = { ok: true; value: unknown } | { ok: false; message: string };
 
 interface Flags {
   json: boolean;
+  noBrowser: boolean;
   teamKey: string | null;
   query: string | null;
   first: number | null;
@@ -37,6 +40,7 @@ interface Flags {
 function parseArgs(argv: string[]): Flags {
   const flags: Flags = {
     json: false,
+    noBrowser: false,
     teamKey: null,
     query: null,
     first: null,
@@ -50,6 +54,9 @@ function parseArgs(argv: string[]): Flags {
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i] ?? '';
     switch (a) {
+      case '--no-browser':
+        flags.noBrowser = true;
+        break;
       case '--json':
         flags.json = true;
         break;
@@ -126,15 +133,14 @@ function parseFieldValuePairs(pairs: string[]): Result {
   return { ok: true, value: input };
 }
 
-function withApiKey(fn: (key: string) => Promise<Result>): Promise<Result> {
-  const key = loadApiKey();
-  if (!key) {
-    return Promise.resolve({
-      ok: false,
-      message: 'No Linear API key found. Run `clipissue login <api-key>` first.',
-    });
+async function withAuth(fn: (authorization: string, auth: Auth) => Promise<Result>): Promise<Result> {
+  try {
+    const auth = await getAuth();
+    if (!auth) return { ok: false, message: 'Not logged in. Run `clipissue login` for browser authorization, or `clipissue login <api-key>`.' };
+    return await fn(auth.authorization, auth);
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : 'Could not load Linear authorization.' };
   }
-  return fn(key);
 }
 
 function unwrapData(r: GqlResult, path: string[]): Result {
@@ -153,35 +159,56 @@ function unwrapData(r: GqlResult, path: string[]): Result {
 // --- commands -------------------------------------------------------------
 
 async function cmdLogin(key: string): Promise<Result> {
-  saveApiKey(key);
-  return { ok: true, value: { success: true, message: 'API key saved to keychain.' } };
+  await withOAuthLock(async () => { saveApiKey(key); clearOAuth(); });
+  return { ok: true, value: { success: true, method: 'api-key', message: 'API key saved.' } };
+}
+
+async function cmdOAuthLogin(noBrowser: boolean): Promise<Result> {
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  process.once('SIGINT', cancel);
+  process.once('SIGTERM', cancel);
+  try {
+    const credential = await authorize({
+      signal: controller.signal,
+      onAuthorize: async (url) => {
+        process.stderr.write(`Authorize Clipissue in your browser:\n${url}\n`);
+        if (!noBrowser) {
+          try { await openBrowser(url); } catch { process.stderr.write('Could not open the browser. Open the URL above manually.\n'); }
+        }
+      },
+    });
+    if (controller.signal.aborted) throw new Error('Sign-in canceled.');
+    await withOAuthLock(async () => {
+      if (controller.signal.aborted) throw new Error('Sign-in canceled.');
+      saveOAuth(credential);
+    });
+    return { ok: true, value: {
+      success: true, method: 'oauth',
+      message: environmentApiKey()
+        ? 'Signed in with Linear OAuth. The API key environment variable still overrides saved credentials.'
+        : 'Signed in with Linear OAuth. You can now run `clipissue whoami`.',
+    } };
+  } finally {
+    process.removeListener('SIGINT', cancel);
+    process.removeListener('SIGTERM', cancel);
+  }
 }
 
 async function cmdLogout(): Promise<Result> {
-  clearApiKey();
-  return { ok: true, value: { success: true, message: 'API key removed.' } };
+  await withOAuthLock(async () => { clearOAuth(); clearApiKey(); });
+  return { ok: true, value: { success: true, message: 'Saved OAuth credentials and API key removed. Environment variables are unchanged.' } };
 }
 
-async function cmdWhoami(apiKey: string): Promise<Result> {
-  const r = await gql(
-    apiKey,
-    '{ viewer { id name email displayName url } organization { id name urlKey } }',
-  );
+async function cmdWhoami(authorization: string, auth: Auth): Promise<Result> {
+  const r = await gql(authorization, '{ viewer { id name email displayName url } organization { id name urlKey } }');
   if (!r.ok) return { ok: false, message: describeError(r) };
   const data = r.data as { viewer?: Record<string, unknown>; organization?: Record<string, unknown> };
-  return {
-    ok: true,
-    value: {
-      viewer: data.viewer ?? {},
-      organization: data.organization ?? {},
-      apiKey: {
-        source: (process.env['CLIPISSUE_API_KEY'] ?? process.env['LINEAR_API_KEY'])
-          ? 'env'
-          : 'keychain',
-        tail: null,
-      },
-    },
-  };
+  return { ok: true, value: {
+    viewer: data.viewer ?? {}, organization: data.organization ?? {},
+    authentication: { method: auth.method, source: auth.source },
+    apiKey: auth.method === 'api-key' ? { source: auth.source, tail: null } : null,
+  } };
 }
 
 async function cmdTeams(apiKey: string, first: number): Promise<Result> {
@@ -849,15 +876,13 @@ async function run(argv: string[]): Promise<void> {
 
   switch (command) {
     case 'login': {
-      const key = rest[0] ?? '';
-      if (!key) {
-        console.error(JSON.stringify({ success: false, error: 'usage: clipissue login <api-key>' }, null, 2));
+      if (rest.length > 1 || (flags.noBrowser && rest.length)) {
+        console.error(JSON.stringify({ success: false, error: 'usage: clipissue login [--no-browser] | clipissue login <api-key>' }));
         process.exitCode = 1;
         return;
       }
-      const result = await cmdLogin(key);
-      const message = result.ok ? String((result.value as { message: string }).message) : result.message;
-      printResult(result, flags.json, () => message);
+      const result = rest[0] ? await cmdLogin(rest[0]) : await cmdOAuthLogin(flags.noBrowser);
+      printResult(result, flags.json, () => String((result as { value: { message: string } }).value.message));
       return;
     }
     case 'logout': {
@@ -867,28 +892,16 @@ async function run(argv: string[]): Promise<void> {
       return;
     }
     case 'whoami': {
-      if (!hasApiKey()) {
-        printResult(
-          { ok: false, message: 'No Linear API key found. Run `clipissue login <api-key>` first.' },
-          flags.json,
-          () => '',
-        );
-        return;
-      }
-      const result = await withApiKey((k) => cmdWhoami(k));
-      printResult(
-        result,
-        flags.json,
-        () => {
-          const v = (result as { value: { viewer: Record<string, unknown> } }).value.viewer;
-          return `Logged in as ${String(v.name ?? v.email ?? 'unknown')}`;
-        },
-      );
+      const result = await withAuth((key, auth) => cmdWhoami(key, auth));
+      printResult(result, flags.json, () => {
+        const viewer = (result as { value: { viewer: Record<string, unknown> } }).value.viewer;
+        return `Logged in as ${String(viewer.name ?? viewer.email ?? 'unknown')}`;
+      });
       return;
     }
     case 'teams': {
       const first = clampInt(flags.first, 25, 1, 50);
-      const result = await withApiKey((k) => cmdTeams(k, first));
+      const result = await withAuth((k) => cmdTeams(k, first));
       printResult(
         result,
         flags.json,
@@ -905,7 +918,7 @@ async function run(argv: string[]): Promise<void> {
       return;
     }
     case 'projects': {
-      const result = await withApiKey((k) => cmdProjects(k, flags));
+      const result = await withAuth((k) => cmdProjects(k, flags));
       printResult(
         result,
         flags.json,
@@ -924,7 +937,17 @@ async function run(argv: string[]): Promise<void> {
     }
     case 'issues':
     case 'search': {
-      const result = await withApiKey((k) => cmdIssues(k, flags));
+      if (command === 'search') {
+        const positional = rest.join(' ').trim();
+        const explicit = flags.query?.trim();
+        if ((!positional && !explicit) || (positional && explicit && positional !== explicit)) {
+          console.error(JSON.stringify({ success: false, error: 'usage: clipissue search <query> [--json]; provide one non-empty search query' }));
+          process.exitCode = 1;
+          return;
+        }
+        flags.query = explicit || positional;
+      }
+      const result = await withAuth((k) => cmdIssues(k, flags));
       printResult(
         result,
         flags.json,
@@ -942,7 +965,7 @@ async function run(argv: string[]): Promise<void> {
       return;
     }
     case 'states': {
-      const result = await withApiKey((k) => cmdStates(k, flags));
+      const result = await withAuth((k) => cmdStates(k, flags));
       printResult(
         result,
         flags.json,
@@ -963,7 +986,7 @@ async function run(argv: string[]): Promise<void> {
     }
     case 'views': {
       const first = clampInt(flags.first, 100, 1, 250);
-      const result = await withApiKey((k) => cmdViews(k, first));
+      const result = await withAuth((k) => cmdViews(k, first));
       printResult(
         result,
         flags.json,
@@ -986,7 +1009,7 @@ async function run(argv: string[]): Promise<void> {
         return;
       }
       const first = clampInt(flags.first, 100, 1, 250);
-      const result = await withApiKey((k) => cmdView(k, nameOrId, first));
+      const result = await withAuth((k) => cmdView(k, nameOrId, first));
       printResult(
         result,
         flags.json,
@@ -1010,7 +1033,7 @@ async function run(argv: string[]): Promise<void> {
         return;
       }
       const first = clampInt(flags.first, 50, 1, 250);
-      const result = await withApiKey((k) => cmdGet(k, id, first));
+      const result = await withAuth((k) => cmdGet(k, id, first));
       const getValue = result.ok ? result.value : null;
       printResult(result, flags.json, () => jsonOut(getValue));
       return;
@@ -1023,7 +1046,7 @@ async function run(argv: string[]): Promise<void> {
         return;
       }
       const first = clampInt(flags.first, CHILDREN_LIMIT, 1, CHILDREN_LIMIT);
-      const result = await withApiKey((k) => cmdChildren(k, id, first));
+      const result = await withAuth((k) => cmdChildren(k, id, first));
       printResult(result, flags.json, () => {
         const value = (result as { value: { children: Array<Record<string, unknown>>; truncated: boolean } }).value;
         const cols: TableColumn<Record<string, unknown>>[] = [
@@ -1047,7 +1070,7 @@ async function run(argv: string[]): Promise<void> {
         return;
       }
       const first = clampInt(flags.first, 50, 1, 250);
-      const result = await withApiKey((k) => cmdComments(k, id, first));
+      const result = await withAuth((k) => cmdComments(k, id, first));
       printResult(result, flags.json, () => {
         const rows = (result as { value: { comments: Array<Record<string, unknown>> } }).value.comments;
         const cols: TableColumn<Record<string, unknown>>[] = [
@@ -1067,7 +1090,7 @@ async function run(argv: string[]): Promise<void> {
       return;
     }
     case 'create': {
-      const result = await withApiKey((k) => cmdCreate(k, { ...flags, args: rest }));
+      const result = await withAuth((k) => cmdCreate(k, { ...flags, args: rest }));
       printResult(result, flags.json, () => {
         const v = (result as { value: { issue: Record<string, unknown> } }).value.issue;
         return `Created ${String(v.identifier ?? v.id ?? '')}: ${String(v.url ?? '')}`;
@@ -1075,7 +1098,7 @@ async function run(argv: string[]): Promise<void> {
       return;
     }
     case 'update': {
-      const result = await withApiKey((k) => cmdUpdate(k, { ...flags, args: rest }));
+      const result = await withAuth((k) => cmdUpdate(k, { ...flags, args: rest }));
       printResult(result, flags.json, () => {
         const v = (result as { value: { issue: Record<string, unknown> } }).value.issue;
         return `Updated ${String(v.identifier ?? v.id ?? '')}`;
@@ -1083,7 +1106,7 @@ async function run(argv: string[]): Promise<void> {
       return;
     }
     case 'comment': {
-      const result = await withApiKey((k) => cmdComment(k, rest));
+      const result = await withAuth((k) => cmdComment(k, rest));
       printResult(result, flags.json, () => {
         const v = (result as { value: { comment: Record<string, unknown> } }).value.comment;
         return `Commented ${String(v.url ?? v.id ?? '')}`;
@@ -1161,8 +1184,9 @@ function helpText(): string {
   return `clipissue — Clipissue CLI
 
 Usage:
-  clipissue login <api-key>              Save your Linear API key (Keychain)
-  clipissue logout                       Remove the saved key
+  clipissue login [--no-browser]         Sign in with Linear OAuth (browser + PKCE)
+  clipissue login <api-key>              Save a personal API key instead
+  clipissue logout                       Remove saved OAuth credentials and API key
   clipissue whoami [--json]              Show the current user and organization
   clipissue teams [--json] [--first N]   List teams
   clipissue states [--json] [--team KEY] [--first N]   List workflow states (for stateId)
@@ -1197,9 +1221,13 @@ Globals:
   CLIPISSUE_API_KEY                   Env var alternative to Keychain (CI only;
                                       legacy LINEAR_API_KEY still honored)
 
-The API key is read from macOS Keychain (or CLIPISSUE_API_KEY). It is never
-accepted as a CLI argument and never printed.
+OAuth tokens are stored separately from the desktop app and refresh automatically.
+Credential priority: API key environment variable > CLI OAuth > saved API key.
+API key login is also supported. Credentials are never printed.
 `;
 }
 
-run(process.argv.slice(2));
+run(process.argv.slice(2)).catch((error: unknown) => {
+  console.error(JSON.stringify({ success: false, error: error instanceof Error ? error.message : 'Command failed.' }, null, 2));
+  process.exitCode = 1;
+});

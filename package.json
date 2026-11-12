@@ -29,7 +29,7 @@
     "build": "tsc",
     "start": "node bin/clipissue.mjs",
     "prepare": "npm run build",
-    "test": "npm run build && node --test test/package.test.mjs",
+    "test": "npm run build && node --test test/*.test.mjs",
     "prepublishOnly": "npm run typecheck && npm test",
     "link": "node bin/link.mjs"
   },

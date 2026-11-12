@@ -51,3 +51,12 @@ test('the npm tarball runs without source files and includes the installable ski
     rmSync(temporary, { recursive: true, force: true });
   }
 });
+
+// Source checkouts use Node's type stripping rather than the compiled tarball.
+const [major, minor] = process.versions.node.split('.').map(Number);
+test('source entrypoint runs on Node versions with type stripping', { skip: major < 22 || (major === 22 && minor < 6) }, () => {
+  const output = execFileSync(process.execPath, [join(root, 'bin', 'clipissue.mjs'), 'help'], {
+    env: { ...process.env, CLIPISSUE_USE_DIST: '0' }, encoding: 'utf8',
+  });
+  assert.match(output, /Sign in with Linear OAuth/);
+});

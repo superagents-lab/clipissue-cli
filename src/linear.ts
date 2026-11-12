@@ -1,3 +1,5 @@
+import { getAuth } from './auth.ts';
+
 /**
  * Minimal GraphQL client for the Linear API.
  *
@@ -26,15 +28,25 @@ interface LinearApiErrorBody {
 }
 
 export function gql(apiKey: string, query: string, variables?: Record<string, unknown>): Promise<GqlResult> {
-  return fetch(LINEAR_API_URL, {
+  const request = (authorization: string) => fetch(LINEAR_API_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: apiKey,
+      Authorization: authorization,
     },
     body: JSON.stringify({ query, variables: variables ?? {} }),
-  })
+  });
+  return request(apiKey)
     .then(async (res) => {
+      if (res.status === 401 && apiKey.startsWith('Bearer ')) {
+        try {
+          const refreshed = await getAuth(apiKey);
+          if (!refreshed || refreshed.method !== 'oauth') return { ok: false as const, code: 'AUTH_ERROR', message: 'Not logged in. Run `clipissue login`.' };
+          res = await request(refreshed.authorization);
+        } catch (error) {
+          return { ok: false as const, code: 'AUTH_ERROR', message: error instanceof Error ? error.message : 'Could not refresh Linear authorization.' };
+        }
+      }
       if (!res.ok) {
         return {
           ok: false as const,
