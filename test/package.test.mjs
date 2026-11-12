@@ -8,13 +8,15 @@ import test from 'node:test';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+// A publish dry run still needs a real local tarball for the installation test.
+const npmEnv = { ...process.env, npm_config_dry_run: 'false' };
 
 test('the npm tarball runs without source files and includes the installable skill', () => {
   const temporary = mkdtempSync(join(tmpdir(), 'clipissue-package-'));
   try {
     const [packed] = JSON.parse(execFileSync(npm, [
       'pack', '--json', '--ignore-scripts', '--pack-destination', temporary,
-    ], { cwd: root, encoding: 'utf8' }));
+    ], { cwd: root, env: npmEnv, encoding: 'utf8' }));
     const files = new Set(packed.files.map((file) => file.path));
     assert(files.has('dist/cli.js'));
     assert(files.has('skills/clipissue/SKILL.md'));
@@ -23,7 +25,7 @@ test('the npm tarball runs without source files and includes the installable ski
     execFileSync(npm, [
       'install', '--prefix', temporary, '--ignore-scripts', '--no-audit', '--no-fund',
       join(temporary, packed.filename),
-    ], { encoding: 'utf8' });
+    ], { env: npmEnv, encoding: 'utf8' });
     const entry = join(temporary, 'node_modules', '@fatwang2', 'clipissue', 'bin', 'clipissue.mjs');
     const env = { ...process.env, HOME: temporary, USERPROFILE: temporary };
     delete env.CLIPISSUE_SKILL_SOURCE;
